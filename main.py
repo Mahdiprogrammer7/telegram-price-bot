@@ -8,18 +8,20 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import requests
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.server_api import ServerApi  # <--- اضافه شد
 from oilpriceapi import OilPriceAPI
 
 # ==================== تنظیمات ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8825337126:AAGo-ZLEzFGhQpDN-qbw4ufkazZ0w3OrgNQ")
-MONGO_URI = os.environ.get("MONGO_URI", "")
-OIL_PRICE_API_KEY = os.environ.get("OIL_PRICE_API_KEY", "")
+# استفاده از .strip() برای حذف کاراکترهای اضافی (مثل Enter) که موقع کپی در Render ایجاد میشه
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+MONGO_URI = os.environ.get("MONGO_URI", "").strip()
+OIL_PRICE_API_KEY = os.environ.get("OIL_PRICE_API_KEY", "").strip()
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 
 CRYPTO_API_URL = 'https://api.abantether.com/api/v1/manager/otc/ticker'
 FIAT_API_URL = 'https://cdn.jsdelivr.net/gh/HosseinOdd/Navasan-API@main/data/fiat.json'
 GOLD_API_URL = 'https://cdn.jsdelivr.net/gh/HosseinOdd/Navasan-API@main/data/gold.json'
 
-CHANNEL_ID = os.environ.get("CHANNEL_ID", "") 
 CHANNEL_POST_INTERVAL = 3600 
 
 # ==================== دیتابیس ====================
@@ -32,7 +34,12 @@ async def init_db():
         print("⚠️ MONGO_URI set نشده است. دیتابیس کار نمیکند.")
         return
     try:
-        db_client = AsyncIOMotorClient(MONGO_URI, server_api='1', tlsCAFile=certifi.where())
+        # اصلاح خطای ServerApi
+        db_client = AsyncIOMotorClient(
+            MONGO_URI,
+            server_api=ServerApi('1'),
+            tlsCAFile=certifi.where()
+        )
         db = db_client["telegram_price_bot"]
         users_collection = db["users"]
         await users_collection.create_index("chat_id", unique=True)
@@ -56,7 +63,9 @@ def fetch_oil():
         client = OilPriceAPI(api_key=OIL_PRICE_API_KEY)
         res = client.prices.get("BRENT_CRUDE_USD")
         return {"price": res.value, "currency": res.currency}
-    except: return None
+    except Exception as e: 
+        print(f"❌ Oil API error: {e}")
+        return None
 
 def fetch_fiat(symbol):
     try:
@@ -242,27 +251,26 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app_flask.run(host='0.0.0.0', port=port)
 
+# این تابع قبل از شروع ربات اجرا میشه تا دیتابیس و تسک پس‌زمینه رو راه بندازه
+async def post_init(application: Application) -> None:
+    await init_db()
+    # شروع تسک پس‌زمینه برای کانال
+    asyncio.create_task(channel_poster(application))
+
 def main():
     # 1. اجرای Flask در یک ترد جداگانه برای پاسخ به Health Check رندر
     threading.Thread(target=run_flask, daemon=True).start()
     
     # 2. اجرای ربات تلگرام در حلقه اصلی
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    # راه‌اندازی تسک پس‌زمینه برای کانال
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_db()) # دیتابیس رو یکبار مقداردهی اولیه میکنیم
-    loop.create_task(channel_poster(application))
-
     print("🤖 ربات تلگرام روشن شد...")
-    # نکته کلیدی: استفاده از close_loop=False برای جلوگیری از تداخل
-    application.run_polling(close_loop=False, drop_pending_updates=True)
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
