@@ -23,13 +23,34 @@ FEEDBACK_ID = os.environ.get("FEEDBACK_ID", "@mahdi8iiii")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot_username") # بدون @
 
 ADMIN_IDS = {x.strip() for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
-ADMIN_PAGE_SIZE = 6
+ADMIN_PAGE_SIZE = 8
 PRO_INVITE_THRESHOLD = 5
 CHANNEL_POST_INTERVAL = 3600
 
 CRYPTO_API_URL = 'https://api.abantether.com/api/v1/manager/otc/ticker'
 FIAT_API_URL = 'https://cdn.jsdelivr.net/gh/HosseinOdd/Navasan-API@main/data/fiat.json'
 GOLD_API_URL = 'https://cdn.jsdelivr.net/gh/HosseinOdd/Navasan-API@main/data/gold.json'
+
+# ==================== لیست دارایی‌ها ====================
+POPULAR_CRYPTOS = ["BTC", "ETH", "USDT", "BNB", "SOL", "XRP", "ADA", "DOGE", "TRX", "TON"]
+POPULAR_FIATS = ["USD", "EUR", "AED", "TRY", "GBP", "IQD", "CNY", "JPY", "CAD", "AUD", "CHF", "SAR"]
+POPULAR_GOLDS = ["gold_18", "coin_emami", "coin_half", "coin_quarter", "gold_miskal", "coin_bahar", "coin_gerami"]
+
+FIAT_NAMES = {
+    "USD": "دلار آمریکا", "EUR": "یورو", "GBP": "پوند انگلیس",
+    "AED": "درهم امارات", "TRY": "لیر ترکیه", "CNY": "یوان چین",
+    "JPY": "ین ژاپن", "CAD": "دلار کانادا", "AUD": "دلار استرالیا",
+    "CHF": "فرانک سوئیس", "IQD": "دینار عراق", "SAR": "ریال عربستان",
+    "KWD": "دینار کویت", "QAR": "ریال قطر", "OMR": "ریال عمان",
+    "BHD": "دینار بحرین", "JOD": "دینار اردن", "RUB": "روبل روسیه",
+    "INR": "روپیه هند", "PKR": "روپیه پاکستان", "AFN": "افغانی",
+}
+
+GOLD_NAMES = {
+    "gold_18": "طلای ۱۸ عیار", "gold_24": "طلای ۲۴ عیار", "gold_miskal": "مثقال طلا",
+    "coin_emami": "سکه امامی", "coin_bahar": "سکه بهار آزادی", "coin_half": "نیم سکه",
+    "coin_quarter": "ربع سکه", "coin_gerami": "سکه گرمی",
+}
 
 # ==================== سیستم ترجمه ====================
 TRANSLATIONS = {
@@ -159,9 +180,6 @@ async def get_lang(chat_id):
     return user.get("language", "fa") if user else "fa"
 
 # ==================== قیمت‌ها ====================
-FIAT_NAMES = {"USD": "دلار آمریکا", "EUR": "یورو", "GBP": "پوند انگلیس", "AED": "درهم امارات", "TRY": "لیر ترکیه"}
-GOLD_NAMES = {"gold_18": "طلای ۱۸ عیار", "coin_emami": "سکه امامی", "coin_half": "نیم سکه"}
-
 def format_price(val):
     if val is None: return "نامشخص"
     try: return f"{float(val):,.0f}"
@@ -186,8 +204,16 @@ def fetch_fiat(sym):
 def fetch_gold(asset):
     try:
         res = requests.get(GOLD_API_URL, timeout=10).json()
-        key_map = {"gold_18": "18ayar", "coin_emami": "sekkeh", "coin_half": "nim"}
-        if asset in key_map and key_map[asset] in res: return float(res[key_map[asset]]["value"])
+        key_map = {
+            "gold_18": "18ayar", "gold_24": "18ayar", "gold_miskal": "18ayar",
+            "coin_emami": "sekkeh", "coin_bahar": "bahar", "coin_half": "nim",
+            "coin_quarter": "rob", "coin_gerami": "gerami"
+        }
+        if asset in key_map and key_map[asset] in res:
+            base_price = float(res[key_map[asset]]["value"])
+            if asset == "gold_24": return base_price * (24 / 18)
+            if asset == "gold_miskal": return base_price * 4.608
+            return base_price
     except: pass
     return None
 
@@ -228,6 +254,33 @@ def main_menu(lang):
         [InlineKeyboardButton(t("menu_profile", lang), callback_data="MENU:PROFILE"), InlineKeyboardButton(t("menu_help", lang), callback_data="MENU:HELP")],
         [InlineKeyboardButton(t("menu_leaderboard", lang), callback_data="MENU:LEADERBOARD")]
     ])
+
+def get_crypto_kb(lang):
+    markup = InlineKeyboardMarkup([])
+    pairs = [POPULAR_CRYPTOS[i:i+2] for i in range(0, len(POPULAR_CRYPTOS), 2)]
+    for pair in pairs:
+        row = [InlineKeyboardButton(sym, callback_data=f"CRYPTO:{sym}") for sym in pair]
+        markup.inline_keyboard.append(row)
+    markup.inline_keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
+    return markup
+
+def get_fiat_kb(lang):
+    markup = InlineKeyboardMarkup([])
+    pairs = [POPULAR_FIATS[i:i+2] for i in range(0, len(POPULAR_FIATS), 2)]
+    for pair in pairs:
+        row = [InlineKeyboardButton(FIAT_NAMES.get(sym, sym), callback_data=f"FIAT:{sym}") for sym in pair]
+        markup.inline_keyboard.append(row)
+    markup.inline_keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
+    return markup
+
+def get_gold_kb(lang):
+    markup = InlineKeyboardMarkup([])
+    pairs = [POPULAR_GOLDS[i:i+2] for i in range(0, len(POPULAR_GOLDS), 2)]
+    for pair in pairs:
+        row = [InlineKeyboardButton(GOLD_NAMES.get(sym, sym), callback_data=f"GOLD:{sym}") for sym in pair]
+        markup.inline_keyboard.append(row)
+    markup.inline_keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
+    return markup
 
 def force_join_kb(lang):
     return InlineKeyboardMarkup([
@@ -401,12 +454,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: await update.message.reply_text("❌ عدد معتبر وارد کنید.")
         return
 
+    # جستجوی سریع با تایپ کردن
     sym = text.upper()
-    price = get_price(sym)
-    if price:
-        await update.message.reply_text(f"💰 قیمت *{get_display_name(sym)}*: *{format_price(price)}*", parse_mode='Markdown')
-    else:
-        await update.message.reply_text("❌ یافت نشد.")
+    if sym in POPULAR_CRYPTOS or sym in FIAT_NAMES or sym in GOLD_NAMES or sym == "TOMAN":
+        price = get_price(sym)
+        if price:
+            await update.message.reply_text(f"💰 قیمت *{get_display_name(sym)}*: *{format_price(price)}*", parse_mode='Markdown')
+            return
+    await update.message.reply_text("❌ یافت نشد. از منو استفاده کنید.")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -474,15 +529,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user and user.get("blocked"): return
 
     if data == "MENU:MAIN": await query.edit_message_text(t("menu_title", lang), reply_markup=main_menu(lang), parse_mode='Markdown')
-    elif data == "MENU:CRYPTO":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("BTC", callback_data="CRYPTO:BTC"), InlineKeyboardButton("ETH", callback_data="CRYPTO:ETH")], [InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")]])
-        await query.edit_message_text(t("crypto_title", lang), reply_markup=kb, parse_mode='Markdown')
-    elif data == "MENU:FIAT":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("دلار", callback_data="FIAT:USD"), InlineKeyboardButton("یورو", callback_data="FIAT:EUR")], [InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")]])
-        await query.edit_message_text(t("fiat_title", lang), reply_markup=kb, parse_mode='Markdown')
-    elif data == "MENU:GOLD":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("طلای ۱۸", callback_data="GOLD:gold_18"), InlineKeyboardButton("سکه امامی", callback_data="GOLD:coin_emami")], [InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")]])
-        await query.edit_message_text(t("gold_title", lang), reply_markup=kb, parse_mode='Markdown')
+    elif data == "MENU:CRYPTO": await query.edit_message_text(t("crypto_title", lang), reply_markup=get_crypto_kb(lang), parse_mode='Markdown')
+    elif data == "MENU:FIAT": await query.edit_message_text(t("fiat_title", lang), reply_markup=get_fiat_kb(lang), parse_mode='Markdown')
+    elif data == "MENU:GOLD": await query.edit_message_text(t("gold_title", lang), reply_markup=get_gold_kb(lang), parse_mode='Markdown')
     elif data == "MENU:OIL":
         oil = fetch_oil()
         txt = f"🛢️ *نفت برنت*\n💰 {format_price(oil['price'])} {oil['currency']}" if oil else "❌ در دسترس نیست."
@@ -490,9 +539,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "MENU:MARKET":
         txt = f"📊 *بازار امروز*\n🪙 BTC: {format_price(get_price('BTC'))}\n💵 دلار: {format_price(get_price('USD'))}\n🥇 طلا: {format_price(get_price('gold_18'))}\n🛢️ نفت: {format_price(fetch_oil()['price'] if fetch_oil() else 0)}"
         await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")]]), parse_mode='Markdown')
+    
     elif data.startswith(("CRYPTO:", "FIAT:", "GOLD:")):
         parts = data.split(":")
-        await query.edit_message_text(f"💰 قیمت *{get_display_name(parts[1])}*: *{format_price(get_price(parts[1]))}*", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")]]), parse_mode='Markdown')
+        price = get_price(parts[1])
+        await query.edit_message_text(f"💰 قیمت *{get_display_name(parts[1])}*: *{format_price(price)}*", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")]]), parse_mode='Markdown')
 
     elif data == "MENU:PROFILE":
         user = await get_user(chat_id)
@@ -553,7 +604,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("myid", myid_command)) # <--- دستور جدید
+    app.add_handler(CommandHandler("myid", myid_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     print("🤖 Bot Started...")
