@@ -256,31 +256,31 @@ def main_menu(lang):
     ])
 
 def get_crypto_kb(lang):
-    markup = InlineKeyboardMarkup([])
+    keyboard = []
     pairs = [POPULAR_CRYPTOS[i:i+2] for i in range(0, len(POPULAR_CRYPTOS), 2)]
     for pair in pairs:
         row = [InlineKeyboardButton(sym, callback_data=f"CRYPTO:{sym}") for sym in pair]
-        markup.inline_keyboard.append(row)
-    markup.inline_keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
-    return markup
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
+    return InlineKeyboardMarkup(keyboard)
 
 def get_fiat_kb(lang):
-    markup = InlineKeyboardMarkup([])
+    keyboard = []
     pairs = [POPULAR_FIATS[i:i+2] for i in range(0, len(POPULAR_FIATS), 2)]
     for pair in pairs:
         row = [InlineKeyboardButton(FIAT_NAMES.get(sym, sym), callback_data=f"FIAT:{sym}") for sym in pair]
-        markup.inline_keyboard.append(row)
-    markup.inline_keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
-    return markup
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
+    return InlineKeyboardMarkup(keyboard)
 
 def get_gold_kb(lang):
-    markup = InlineKeyboardMarkup([])
+    keyboard = []
     pairs = [POPULAR_GOLDS[i:i+2] for i in range(0, len(POPULAR_GOLDS), 2)]
     for pair in pairs:
         row = [InlineKeyboardButton(GOLD_NAMES.get(sym, sym), callback_data=f"GOLD:{sym}") for sym in pair]
-        markup.inline_keyboard.append(row)
-    markup.inline_keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
-    return markup
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton(t("menu_back", lang), callback_data="MENU:MAIN")])
+    return InlineKeyboardMarkup(keyboard)
 
 def force_join_kb(lang):
     return InlineKeyboardMarkup([
