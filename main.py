@@ -19,9 +19,8 @@ CRYPTO_API_URL = 'https://api.abantether.com/api/v1/manager/otc/ticker'
 FIAT_API_URL = 'https://cdn.jsdelivr.net/gh/HosseinOdd/Navasan-API@main/data/fiat.json'
 GOLD_API_URL = 'https://cdn.jsdelivr.net/gh/HosseinOdd/Navasan-API@main/data/gold.json'
 
-# آیدی کانال تلگرام رو اینجا بذار (مثلا @my_channel یا -100123456789)
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "") 
-CHANNEL_POST_INTERVAL = 3600 # هر 1 ساعت
+CHANNEL_POST_INTERVAL = 3600 
 
 # ==================== دیتابیس ====================
 db_client = None
@@ -233,6 +232,7 @@ async def channel_poster(app: Application):
         except Exception as e:
             print(f"❌ خطا در ارسال پست کانال: {e}")
 
+# ==================== اجرای اصلی ====================
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
@@ -242,14 +242,11 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app_flask.run(host='0.0.0.0', port=port)
 
-# ==================== اجرای اصلی ====================
 def main():
+    # 1. اجرای Flask در یک ترد جداگانه برای پاسخ به Health Check رندر
     threading.Thread(target=run_flask, daemon=True).start()
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_db())
-
+    # 2. اجرای ربات تلگرام در حلقه اصلی
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -257,10 +254,15 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
+    # راه‌اندازی تسک پس‌زمینه برای کانال
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_db()) # دیتابیس رو یکبار مقداردهی اولیه میکنیم
     loop.create_task(channel_poster(application))
 
     print("🤖 ربات تلگرام روشن شد...")
-    application.run_polling(drop_pending_updates=True)
+    # نکته کلیدی: استفاده از close_loop=False برای جلوگیری از تداخل
+    application.run_polling(close_loop=False, drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
