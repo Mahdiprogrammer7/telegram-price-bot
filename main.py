@@ -8,11 +8,10 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import requests
 from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo.server_api import ServerApi  # <--- اضافه شد
+from pymongo.server_api import ServerApi
 from oilpriceapi import OilPriceAPI
 
 # ==================== تنظیمات ====================
-# استفاده از .strip() برای حذف کاراکترهای اضافی (مثل Enter) که موقع کپی در Render ایجاد میشه
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 MONGO_URI = os.environ.get("MONGO_URI", "").strip()
 OIL_PRICE_API_KEY = os.environ.get("OIL_PRICE_API_KEY", "").strip()
@@ -31,10 +30,9 @@ users_collection = None
 async def init_db():
     global db_client, users_collection
     if not MONGO_URI:
-        print("⚠️ MONGO_URI set نشده است. دیتابیس کار نمیکند.")
+        print("⚠️ MONGO_URI set نشده است.")
         return
     try:
-        # اصلاح خطای ServerApi
         db_client = AsyncIOMotorClient(
             MONGO_URI,
             server_api=ServerApi('1'),
@@ -46,6 +44,23 @@ async def init_db():
         print("✅ اتصال به دیتابیس برقرار شد.")
     except Exception as e:
         print(f"❌ خطا در دیتابیس: {e}")
+
+async def get_user(chat_id):
+    if users_collection is None: return None
+    return await users_collection.find_one({"chat_id": chat_id})
+
+async def save_user(chat_id, name):
+    if users_collection is None: return False
+    try:
+        await users_collection.update_one(
+            {"chat_id": chat_id},
+            {"$set": {"name": name, "updated_at": time.time()}},
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        print(f"❌ خطا در ذخیره کاربر: {e}")
+        return False
 
 # ==================== دریافت قیمت‌ها ====================
 FIAT_NAMES = {"USD": "دلار", "EUR": "یورو", "AED": "درهم", "TRY": "لیر"}
@@ -63,9 +78,7 @@ def fetch_oil():
         client = OilPriceAPI(api_key=OIL_PRICE_API_KEY)
         res = client.prices.get("BRENT_CRUDE_USD")
         return {"price": res.value, "currency": res.currency}
-    except Exception as e: 
-        print(f"❌ Oil API error: {e}")
-        return None
+    except: return None
 
 def fetch_fiat(symbol):
     try:
@@ -132,8 +145,18 @@ def gold_menu():
 
 # ==================== هندلرها ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "سلام! 👋\n\nبه *ارز آنلاین* خوش آمدید.\n\nاز منوی زیر برای دریافت قیمت‌ها استفاده کنید:"
-    await update.message.reply_text(text, reply_markup=main_menu(), parse_mode='Markdown')
+    chat_id = update.effective_chat.id
+    user = await get_user(chat_id)
+    
+    if user:
+        # کاربر قبلا ثبت‌نام کرده
+        text = f"👋 سلام *{user['name']}* عزیز! خوش برگشتی.\n\nاز منوی زیر استفاده کنید:"
+        await update.message.reply_text(text, reply_markup=main_menu(), parse_mode='Markdown')
+    else:
+        # کاربر جدید است، درخواست نام
+        context.user_data['state'] = 'awaiting_name'
+        text = "سلام! 👋\n\nبه *ارز آنلاین* خوش آمدید.\n\nبرای شروع، لطفاً *نام و نام خانوادگی* خود را وارد کنید:"
+        await update.message.reply_text(text, parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "ℹ️ *راهنمای ربات*\n\n- برای دریافت قیمت‌ها از منو استفاده کنید.\n- دستور /start برای شروع مجدد."
@@ -145,7 +168,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "MENU:MAIN":
-        await query.edit_message_text("🏠 *منوی اصلی*\nلطفا یک گزینه را انتخاب کنید:", reply_markup=main_menu(), parse_mode='Markdown')
+        chat_id = update.effective_chat.id
+        user = await get_user(chat_id)
+        name = user['name'] if user else "کاربر"
+        text = f"🏠 *منوی اصلی*\nسلام {name} عزیز، لطفا یک گزینه را انتخاب کنید:"
+        await query.edit_message_text(text, reply_markup=main_menu(), parse_mode='Markdown')
     
     elif data == "MENU:CRYPTO":
         await query.edit_message_text("🪙 *ارز دیجیتال*\nیکی از رمزارزها را انتخاب کنید:", reply_markup=crypto_menu(), parse_mode='Markdown')
@@ -206,14 +233,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="MENU:GOLD")]]), parse_mode='Markdown')
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    sym = text.strip().upper()
+    chat_id = update.effective_chat.id
+    text = update.message.text.strip()
+    
+    # بررسی اینکه آیا کاربر در حال ثبت‌نام است؟
+    if context.user_data.get('state') == 'awaiting_name':
+        if len(text) < 3:
+            await update.message.reply_text("❌ نام معتبر نیست (حداقل ۳ حرف). لطفاً دوباره وارد کنید:")
+            return
+        
+        # ذخیره در دیتابیس
+        success = await save_user(chat_id, text)
+        if success:
+            context.user_data['state'] = None # پاک کردن وضعیت
+            success_text = f"✅ *ثبت‌نام با موفقیت انجام شد!*\n\n👤 نام: *{text}*\n\nخوش آمدی! از منوی زیر استفاده کن:"
+            await update.message.reply_text(success_text, reply_markup=main_menu(), parse_mode='Markdown')
+        else:
+            await update.message.reply_text("❌ خطایی در ثبت‌نام رخ داد. لطفاً دوباره تلاش کنید.")
+        return
+
+    # اگر در حال ثبت‌نام نبود، بررسی میکنیم آیا نماد ارز فرستاده
+    sym = text.upper()
     if sym in ["BTC", "ETH", "USDT"] or sym in FIAT_NAMES:
         price = get_price(sym)
         if price:
             await update.message.reply_text(f"💰 قیمت *{sym}*: *{format_price(price)}*", parse_mode='Markdown')
         else:
             await update.message.reply_text("❌ یافت نشد.")
+    else:
+        # اگر پیام نامفهوم بود
+        await update.message.reply_text("❌ لطفاً از منو استفاده کنید یا نام یک ارز (مثلا BTC) را بفرستید.")
 
 # ==================== کانال و سرور ====================
 async def channel_poster(app: Application):
@@ -241,7 +290,6 @@ async def channel_poster(app: Application):
         except Exception as e:
             print(f"❌ خطا در ارسال پست کانال: {e}")
 
-# ==================== اجرای اصلی ====================
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
@@ -251,17 +299,12 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app_flask.run(host='0.0.0.0', port=port)
 
-# این تابع قبل از شروع ربات اجرا میشه تا دیتابیس و تسک پس‌زمینه رو راه بندازه
 async def post_init(application: Application) -> None:
     await init_db()
-    # شروع تسک پس‌زمینه برای کانال
     asyncio.create_task(channel_poster(application))
 
 def main():
-    # 1. اجرای Flask در یک ترد جداگانه برای پاسخ به Health Check رندر
     threading.Thread(target=run_flask, daemon=True).start()
-    
-    # 2. اجرای ربات تلگرام در حلقه اصلی
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     application.add_handler(CommandHandler("start", start))
