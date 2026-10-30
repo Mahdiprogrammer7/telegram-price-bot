@@ -19,9 +19,10 @@ CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
 CHANNEL_LINK = os.environ.get("CHANNEL_LINK", "https://t.me/your_channel")
 DEVELOPER_NAME = os.environ.get("DEVELOPER_NAME", "مهدی نجفی")
 FEEDBACK_ID = os.environ.get("FEEDBACK_ID", "@mahdi8iiii")
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot_username")
 
+# لیست آیدی ادمین‌ها
 ADMIN_IDS = {x.strip() for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
+ADMIN_PAGE_SIZE = 6
 CHANNEL_POST_INTERVAL = 3600
 
 CRYPTO_API_URL = 'https://api.abantether.com/api/v1/manager/otc/ticker'
@@ -47,9 +48,10 @@ db_client = None
 users_collection = None
 alerts_collection = None
 favorites_collection = None
+referrals_collection = None
 
 async def init_db():
-    global db_client, users_collection, alerts_collection, favorites_collection
+    global db_client, users_collection, alerts_collection, favorites_collection, referrals_collection
     if not MONGO_URI: return
     try:
         db_client = AsyncIOMotorClient(MONGO_URI, server_api=ServerApi('1'), tlsCAFile=certifi.where())
@@ -57,6 +59,7 @@ async def init_db():
         users_collection = db["users"]
         alerts_collection = db["alerts"]
         favorites_collection = db["favorites"]
+        referrals_collection = db["referrals"]
         
         await users_collection.create_index("chat_id", unique=True)
         await alerts_collection.create_index([("chat_id", 1), ("asset", 1)], unique=True)
@@ -164,18 +167,108 @@ def is_admin(chat_id): return str(chat_id) in ADMIN_IDS
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 داشبورد", callback_data="ADMIN:STATS")],
-        [InlineKeyboardButton("👥 کاربران", callback_data="ADMIN:USERS:0"), InlineKeyboardButton("🔎 جستجو", callback_data="ADMIN:SEARCH")],
-        [InlineKeyboardButton("📢 پیام همگانی", callback_data="ADMIN:BROADCAST")],
-        [InlineKeyboardButton("🔙 بستن پنل", callback_data="MENU:MAIN")]
+        [InlineKeyboardButton("📊 داشبورد", callback_data="ADMIN:STATS"), InlineKeyboardButton("👥 کاربران", callback_data="ADMIN:USERS:0")],
+        [InlineKeyboardButton("🔎 جستجوی کاربر", callback_data="ADMIN:SEARCH"), InlineKeyboardButton("📢 ارسال پیام همگانی", callback_data="ADMIN:BROADCAST")],
+        [InlineKeyboardButton("🔔 هشدارها", callback_data="ADMIN:ALERTS"), InlineKeyboardButton("⭐ افراد خاص", callback_data="ADMIN:SPECIAL")],
+        [InlineKeyboardButton("⭐ علاقه‌مندی‌ها", callback_data="ADMIN:FAVS"), InlineKeyboardButton("🩺 وضعیت سیستم", callback_data="ADMIN:HEALTH")],
+        [InlineKeyboardButton("🔄 بروزرسانی", callback_data="ADMIN:HOME")]
     ])
+
+def admin_back_keyboard(): return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="ADMIN:HOME")]])
 
 async def admin_stats_text():
     if users_collection is None: return "❌ دیتابیس متصل نیست."
+    now = time.time()
     total = await users_collection.count_documents({})
+    active = await users_collection.count_documents({"account_status": {"$ne": "logged_out"}, "blocked": {"$ne": True}})
+    logged_out = await users_collection.count_documents({"account_status": "logged_out"})
+    blocked = await users_collection.count_documents({"blocked": True})
+    active_24h = await users_collection.count_documents({"last_seen_at": {"$gte": now - 86400}, "account_status": {"$ne": "logged_out"}})
+    active_7d = await users_collection.count_documents({"last_seen_at": {"$gte": now - 7*86400}, "account_status": {"$ne": "logged_out"}})
+    active_30d = await users_collection.count_documents({"last_seen_at": {"$gte": now - 30*86400}, "account_status": {"$ne": "logged_out"}})
+    new_24h = await users_collection.count_documents({"created_at": {"$gte": now - 86400}})
+    new_7d = await users_collection.count_documents({"created_at": {"$gte": now - 7*86400}})
     alerts = await alerts_collection.count_documents({}) if alerts_collection is not None else 0
     favs = await favorites_collection.count_documents({}) if favorites_collection is not None else 0
-    return f"👨‍💻 **داشبورد مدیریت**\n\n👥 کل کاربران: **{total:,}**\n🔔 هشدارهای فعال: **{alerts:,}**\n⭐ علاقه‌مندی‌ها: **{favs:,}**"
+    refs = await referrals_collection.count_documents({}) if referrals_collection is not None else 0
+    specials = await users_collection.count_documents({"special_user": True})
+    
+    return (
+        "👨‍💻 **داشبورد مدیریت ارز آنلاین**\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👥 کل پروفایل‌ها: **{total:,}**\n"
+        f"🟢 حساب‌های فعال: **{active:,}**\n"
+        f"🚪 خارج‌شده‌ها: **{logged_out:,}**\n"
+        f"🚫 مسدودشده‌ها: **{blocked:,}**\n"
+        f"🟢 فعال ۲۴ ساعت: **{active_24h:,}**\n"
+        f"📅 فعال ۷ روز: **{active_7d:,}** | فعال ۳۰ روز: **{active_30d:,}**\n"
+        f"🆕 ثبت‌نام ۲۴ ساعت: **{new_24h:,}** | ۷ روز: **{new_7d:,}**\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🔔 هشدارهای فعال: **{alerts:,}**\n"
+        f"⭐ علاقه‌مندی‌ها: **{favs:,}**\n"
+        f"🎁 Referralها: **{refs:,}**\n"
+        f"⭐ افراد خاص: **{specials:,}**\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🕐 بروزرسانی: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+async def admin_users_page(page=0):
+    page = max(0, int(page))
+    if users_collection is None: return "❌ دیتابیس متصل نیست.", admin_back_keyboard()
+    total = await users_collection.count_documents({})
+    skip = page * ADMIN_PAGE_SIZE
+    docs = await users_collection.find({}).sort("created_at", -1).skip(skip).limit(ADMIN_PAGE_SIZE).to_list(length=ADMIN_PAGE_SIZE)
+    
+    lines = [f"👥 **کاربران (صفحه {page + 1})**", "━━━━━━━━━━━━━━━━━━"]
+    kb = []
+    for i, u in enumerate(docs):
+        name = str(u.get("name", "بدون نام"))[:20]
+        uid = str(u.get("chat_id", "-"))
+        status = "🚫" if u.get("blocked") else ("🚪" if u.get("account_status") == "logged_out" else "🟢")
+        if u.get("special_user"): status += "⭐"
+        lines.append(f"{skip+i+1}. {status} {name} | `{uid}`")
+        kb.append([InlineKeyboardButton(f"{status} {name}", callback_data=f"ADMIN:USER:{uid}")])
+    
+    total_pages = max(1, (total + ADMIN_PAGE_SIZE - 1) // ADMIN_PAGE_SIZE)
+    nav = []
+    if page > 0: nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"ADMIN:USERS:{page-1}"))
+    if page + 1 < total_pages: nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"ADMIN:USERS:{page+1}"))
+    if nav: kb.append(nav)
+    kb.append([InlineKeyboardButton("🔙 پنل مدیریت", callback_data="ADMIN:HOME")])
+    return "\n".join(lines), InlineKeyboardMarkup(kb)
+
+async def admin_user_detail(chat_id):
+    user = await get_user(chat_id)
+    if not user: return "❌ کاربر پیدا نشد.", admin_back_keyboard()
+    status = 'مسدود 🚫' if user.get('blocked') else ('خارج‌شده 🚪' if user.get('account_status') == 'logged_out' else 'فعال 🟢')
+    text = (
+        "👤 **جزئیات کاربر**\n━━━━━━━━━━━━━━━━━━\n"
+        f"📝 نام: **{user.get('name', 'بدون نام')}**\n"
+        f"🆔 Chat ID: `{user.get('chat_id')}`\n"
+        f"🎁 دعوت‌ها: **{user.get('invite_count', 0)}**\n"
+        f"👑 نوع: **{'خاص ⭐' if user.get('special_user') else 'عادی 👤'}**\n"
+        f"📌 وضعیت: **{status}**"
+    )
+    kb = []
+    if user.get("blocked"): kb.append([InlineKeyboardButton("🟢 رفع مسدودی", callback_data=f"ADMIN:UNBLOCK:{chat_id}")])
+    else: kb.append([InlineKeyboardButton("🚫 مسدود کردن", callback_data=f"ADMIN:BLOCK:{chat_id}")])
+    
+    if user.get("special_user"): kb.append([InlineKeyboardButton("⭐ حذف از خاص‌ها", callback_data=f"ADMIN:UNSPECIAL:{chat_id}")])
+    else: kb.append([InlineKeyboardButton("⭐ افزودن به خاص‌ها", callback_data=f"ADMIN:SPECIAL:{chat_id}")])
+    
+    kb.append([InlineKeyboardButton("🔙 کاربران", callback_data="ADMIN:USERS:0")])
+    return text, InlineKeyboardMarkup(kb)
+
+async def admin_special_users():
+    docs = await users_collection.find({"special_user": True}).to_list(length=50)
+    if not docs: return "⭐ هنوز کاربر خاصی وجود ندارد.", admin_back_keyboard()
+    txt = "⭐ **لیست افراد خاص:**\n\n"
+    kb = []
+    for u in docs:
+        txt += f"- {u['name']} | `{u['chat_id']}`\n"
+        kb.append([InlineKeyboardButton(f"👤 {u['name']}", callback_data=f"ADMIN:USER:{u['chat_id']}")])
+    kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="ADMIN:HOME")])
+    return txt, InlineKeyboardMarkup(kb)
 
 # ==================== هندلرهای اصلی ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -195,10 +288,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(update.effective_chat.id):
         await update.message.reply_text("👨‍💻 پنل مدیریت:", reply_markup=admin_keyboard())
 
-async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(f"🆔 Chat ID شما:\n`{chat_id}`\n\nاین شناسه را برای ADMIN_IDS در Render استفاده کن.", parse_mode='Markdown')
-
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
@@ -209,60 +298,63 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(text) < 3:
             await update.message.reply_text("❌ نام معتبر نیست. دوباره وارد کنید:")
             return
-        await users_collection.update_one({"chat_id": str(chat_id)}, {"$set": {"name": text, "language": "fa", "created_at": time.time(), "account_status": "active", "invite_count": 0}}, upsert=True)
+        await users_collection.update_one({"chat_id": str(chat_id)}, {"$set": {"name": text, "language": "fa", "created_at": time.time(), "account_status": "active", "last_seen_at": time.time(), "invite_count": 0}}, upsert=True)
         context.user_data['state'] = None
         await update.message.reply_text(f"✅ ثبت‌نام با موفقیت انجام شد!\n👤 نام: *{text}*\n\nاز منوی زیر استفاده کن:", reply_markup=main_menu(), parse_mode='Markdown')
         return
 
-    # ۲. دریافت مقدار برای مبدل
+    # پنل ادمین (جستجو)
+    if is_admin(chat_id) and state == 'admin_search':
+        context.user_data['state'] = None
+        docs = await users_collection.find({"$or": [{"chat_id": text}, {"name": {"$regex": text, "$options": "i"}}]}).limit(10).to_list(length=10)
+        if not docs:
+            await update.message.reply_text("❌ کاربری یافت نشد.", reply_markup=admin_back_keyboard())
+            return
+        kb = [[InlineKeyboardButton(f"👤 {u['name']}", callback_data=f"ADMIN:USER:{u['chat_id']}")] for u in docs]
+        kb.append([InlineKeyboardButton("🔙 بازگشت", callback_data="ADMIN:HOME")])
+        await update.message.reply_text("🔎 نتایج:", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # پنل ادمین (پیام همگانی)
+    if is_admin(chat_id) and state == 'admin_broadcast':
+        context.user_data['state'] = None
+        sent, failed = 0, 0
+        async for u in users_collection.find({"account_status": {"$ne": "logged_out"}, "blocked": {"$ne": True}}):
+            try:
+                await context.bot.send_message(u["chat_id"], text)
+                sent += 1
+            except: failed += 1
+        await update.message.reply_text(f"✅ ارسال شد.\nموفق: {sent}\nناموفق: {failed}", reply_markup=admin_keyboard())
+        return
+
+    # ۲. مبدل ارز
     if state == 'awaiting_conv_amount':
         try:
             amount = float(text.replace(",", ""))
-            from_asset = context.user_data.get('conv_from')
-            to_asset = context.user_data.get('conv_to')
-            
-            if not from_asset or not to_asset:
-                await update.message.reply_text("❌ خطا. دوباره از منو شروع کنید.", reply_markup=main_menu())
-                return
-                
-            p_from = get_price(from_asset)
-            p_to = get_price(to_asset)
-            
-            if not p_from or not p_to:
-                await update.message.reply_text("❌ قیمت یکی از دارایی‌ها در دسترس نیست.")
-                return
-                
+            from_asset, to_asset = context.user_data.get('conv_from'), context.user_data.get('conv_to')
+            if not from_asset or not to_asset: return
+            p_from, p_to = get_price(from_asset), get_price(to_asset)
+            if not p_from or not p_to: return await update.message.reply_text("❌ قیمت در دسترس نیست.")
             result = amount * p_from / p_to
-            txt = (
-                f"🔄 **نتیجه تبدیل**\n━━━━━━━━━━━━━━━━━━\n"
-                f"💱 {amount:,.2f} {get_display_name(from_asset)}\n⬇️⬇️⬇️\n"
-                f"💰 **{result:,.4f} {get_display_name(to_asset)}**\n"
-                f"━━━━━━━━━━━━━━━━━━"
-            )
             context.user_data['state'] = None
-            await update.message.reply_text(txt, reply_markup=main_menu(), parse_mode='Markdown')
-        except ValueError:
-            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید.")
+            await update.message.reply_text(f"🔄 **نتیجه تبدیل**\n{amount:,.2f} {get_display_name(from_asset)} = **{result:,.4f} {get_display_name(to_asset)}**", reply_markup=main_menu(), parse_mode='Markdown')
+        except ValueError: await update.message.reply_text("❌ عدد معتبر وارد کنید.")
         return
 
-    # ۳. دریافت قیمت برای هشدار
+    # ۳. هشدار قیمت
     if state == 'awaiting_alert_price':
         try:
             price = float(text.replace(",", ""))
             context.user_data['alert_price'] = price
             context.user_data['state'] = 'awaiting_alert_dir'
-            await update.message.reply_text(f"🎯 قیمت هدف: {format_price(price)} تومان\n\nحالا شرط را انتخاب کنید:", reply_markup=get_dir_kb())
-        except ValueError:
-            await update.message.reply_text("❌ لطفاً یک عدد معتبر وارد کنید.")
+            await update.message.reply_text(f"🎯 قیمت هدف: {format_price(price)}\nشرط را انتخاب کنید:", reply_markup=get_dir_kb())
+        except ValueError: await update.message.reply_text("❌ عدد معتبر وارد کنید.")
         return
 
     # جستجوی سریع قیمت
-    sym = text.upper()
-    price = get_price(sym)
-    if price:
-        await update.message.reply_text(f"💰 قیمت *{get_display_name(sym)}*: *{format_price(price)}*", parse_mode='Markdown')
-    else:
-        await update.message.reply_text("❌ یافت نشد. از منو استفاده کنید.")
+    price = get_price(text.upper())
+    if price: await update.message.reply_text(f"💰 قیمت *{get_display_name(text.upper())}*: *{format_price(price)}*", parse_mode='Markdown')
+    else: await update.message.reply_text("❌ یافت نشد.")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -270,129 +362,150 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     chat_id = update.effective_chat.id
     
-    # --- ادمین ---
+    # ================== بخش ادمین ==================
     if data.startswith("ADMIN:") and is_admin(chat_id):
-        if data == "ADMIN:HOME": await query.edit_message_text(await admin_stats_text(), reply_markup=admin_keyboard(), parse_mode='Markdown')
+        if data in ("ADMIN:HOME", "ADMIN:STATS"):
+            await query.edit_message_text(await admin_stats_text(), reply_markup=admin_keyboard(), parse_mode='Markdown')
+        
+        elif data.startswith("ADMIN:USERS:"):
+            page = int(data.split(":")[2])
+            txt, kb = await admin_users_page(page)
+            await query.edit_message_text(txt, reply_markup=kb, parse_mode='Markdown')
+            
+        elif data.startswith("ADMIN:USER:"):
+            uid = data.split(":")[2]
+            txt, kb = await admin_user_detail(uid)
+            await query.edit_message_text(txt, reply_markup=kb, parse_mode='Markdown')
+            
+        elif data.startswith("ADMIN:BLOCK:"):
+            uid = data.split(":")[2]
+            await users_collection.update_one({"chat_id": uid}, {"$set": {"blocked": True}})
+            txt, kb = await admin_user_detail(uid)
+            await query.edit_message_text(txt, reply_markup=kb, parse_mode='Markdown')
+            
+        elif data.startswith("ADMIN:UNBLOCK:"):
+            uid = data.split(":")[2]
+            await users_collection.update_one({"chat_id": uid}, {"$set": {"blocked": False}})
+            txt, kb = await admin_user_detail(uid)
+            await query.edit_message_text(txt, reply_markup=kb, parse_mode='Markdown')
+            
+        elif data.startswith("ADMIN:SPECIAL:"):
+            uid = data.split(":")[2]
+            await users_collection.update_one({"chat_id": uid}, {"$set": {"special_user": True}})
+            txt, kb = await admin_user_detail(uid)
+            await query.edit_message_text(txt, reply_markup=kb, parse_mode='Markdown')
+            
+        elif data.startswith("ADMIN:UNSPECIAL:"):
+            uid = data.split(":")[2]
+            await users_collection.update_one({"chat_id": uid}, {"$set": {"special_user": False}})
+            txt, kb = await admin_user_detail(uid)
+            await query.edit_message_text(txt, reply_markup=kb, parse_mode='Markdown')
+            
+        elif data == "ADMIN:SEARCH":
+            context.user_data['state'] = 'admin_search'
+            await query.edit_message_text("🔎 نام یا Chat ID را بفرستید:", reply_markup=admin_back_keyboard())
+            
+        elif data == "ADMIN:BROADCAST":
+            context.user_data['state'] = 'admin_broadcast'
+            await query.edit_message_text("📢 متن پیام همگانی را بفرستید:", reply_markup=admin_back_keyboard())
+            
+        elif data == "ADMIN:SPECIAL":
+            txt, kb = await admin_special_users()
+            await query.edit_message_text(txt, reply_markup=kb, parse_mode='Markdown')
+            
+        elif data == "ADMIN:HEALTH":
+            await query.edit_message_text("🩺 سیستم کاملاً فعال است.", reply_markup=admin_back_keyboard())
         return
 
-    # --- منوی اصلی ---
+    # ================== بخش کاربر ==================
     if data == "MENU:MAIN":
         context.user_data['state'] = None
         await query.edit_message_text("🏠 *منوی اصلی*\nلطفا یک گزینه را انتخاب کنید:", reply_markup=main_menu(), parse_mode='Markdown')
     
-    # --- نمایش لیست دارایی‌ها ---
-    elif data == "MENU:CRYPTO": await query.edit_message_text("🪙 *ارز دیجیتال*\nانتخاب کنید:", reply_markup=get_assets_kb("CRYPTO", POPULAR_CRYPTOS), parse_mode='Markdown')
-    elif data == "MENU:FIAT": await query.edit_message_text("💵 *ارزهای فیات*\nانتخاب کنید:", reply_markup=get_assets_kb("FIAT", POPULAR_FIATS), parse_mode='Markdown')
-    elif data == "MENU:GOLD": await query.edit_message_text("🥇 *طلا و سکه*\nانتخاب کنید:", reply_markup=get_assets_kb("GOLD", POPULAR_GOLDS), parse_mode='Markdown')
+    elif data == "MENU:CRYPTO": await query.edit_message_text("🪙 *ارز دیجیتال*", reply_markup=get_assets_kb("CRYPTO", POPULAR_CRYPTOS), parse_mode='Markdown')
+    elif data == "MENU:FIAT": await query.edit_message_text("💵 *ارزهای فیات*", reply_markup=get_assets_kb("FIAT", POPULAR_FIATS), parse_mode='Markdown')
+    elif data == "MENU:GOLD": await query.edit_message_text("🥇 *طلا و سکه*", reply_markup=get_assets_kb("GOLD", POPULAR_GOLDS), parse_mode='Markdown')
     
     elif data == "MENU:OIL":
         oil = fetch_oil()
         txt = f"🛢️ *نفت برنت*\n💰 {format_price(oil['price'])} {oil['currency']}" if oil else "❌ در دسترس نیست."
         await query.edit_message_text(txt, reply_markup=back_kb(), parse_mode='Markdown')
-        
     elif data == "MENU:MARKET":
         txt = f"📊 *بازار امروز*\n🪙 BTC: {format_price(get_price('BTC'))}\n💵 دلار: {format_price(get_price('USD'))}\n🥇 طلا: {format_price(get_price('gold_18'))}\n🛢️ نفت: {format_price(fetch_oil()['price'] if fetch_oil() else 0)}"
         await query.edit_message_text(txt, reply_markup=back_kb(), parse_mode='Markdown')
-        
     elif data.startswith(("CRYPTO:", "FIAT:", "GOLD:")):
         parts = data.split(":")
         price = get_price(parts[1])
         await query.edit_message_text(f"💰 قیمت *{get_display_name(parts[1])}*: *{format_price(price)}*", reply_markup=back_kb(), parse_mode='Markdown')
 
-    # --- مبدل ارز (دکمه‌ای) ---
+    # مبدل
     elif data == "CONV:NEW":
         context.user_data['state'] = None
         kb = get_assets_kb("CONV:FROM", ["TOMAN", "USD", "EUR", "BTC", "ETH", "USDT", "gold_18", "coin_emami"], "MENU:MAIN")
-        await query.edit_message_text("🔄 **مبدل ارز**\n\nمرحله ۱: ارز مبدا را انتخاب کنید:", reply_markup=kb, parse_mode='Markdown')
-        
+        await query.edit_message_text("🔄 **مبدل ارز**\nمرحله ۱: ارز مبدا؟", reply_markup=kb, parse_mode='Markdown')
     elif data.startswith("CONV:FROM:"):
         context.user_data['conv_from'] = data.split(":")[2]
         kb = get_assets_kb("CONV:TO", ["TOMAN", "USD", "EUR", "BTC", "ETH", "USDT", "gold_18", "coin_emami"], "MENU:MAIN")
-        await query.edit_message_text(f"✅ مبدا: {get_display_name(context.user_data['conv_from'])}\n\nمرحله ۲: ارز مقصد را انتخاب کنید:", reply_markup=kb, parse_mode='Markdown')
-        
+        await query.edit_message_text(f"✅ مبدا: {get_display_name(context.user_data['conv_from'])}\nمرحله ۲: ارز مقصد؟", reply_markup=kb, parse_mode='Markdown')
     elif data.startswith("CONV:TO:"):
         context.user_data['conv_to'] = data.split(":")[2]
         context.user_data['state'] = 'awaiting_conv_amount'
-        await query.edit_message_text(f"✅ مبدا: {get_display_name(context.user_data['conv_from'])}\n✅ مقصد: {get_display_name(context.user_data['conv_to'])}\n\nمرحله ۳: حالا مقدار را به عدد تایپ کنید و بفرستید (مثال: 100):", reply_markup=back_kb(), parse_mode='Markdown')
+        await query.edit_message_text(f"✅ مبدا: {get_display_name(context.user_data['conv_from'])}\n✅ مقصد: {get_display_name(context.user_data['conv_to'])}\n\nمرحله ۳: مقدار را تایپ کنید:", reply_markup=back_kb(), parse_mode='Markdown')
 
-    # --- هشدار قیمت (دکمه‌ای) ---
+    # هشدار
     elif data == "ALERT:NEW":
         context.user_data['state'] = None
-        await query.edit_message_text("🔔 **ثبت هشدار**\n\nدسته‌بندی دارایی را انتخاب کنید:", reply_markup=get_alert_cat_kb(), parse_mode='Markdown')
-        
+        await query.edit_message_text("🔔 **ثبت هشدار**\nدسته‌بندی؟", reply_markup=get_alert_cat_kb(), parse_mode='Markdown')
     elif data.startswith("ALERT:CAT:"):
         cat = data.split(":")[2]
         assets = POPULAR_CRYPTOS if cat == "crypto" else POPULAR_FIATS if cat == "fiat" else POPULAR_GOLDS
         kb = get_assets_kb("ALERT:SET", assets, "ALERT:NEW")
-        await query.edit_message_text("🔔 **انتخاب دارایی**\nکدام دارایی را می‌خواهید؟", reply_markup=kb, parse_mode='Markdown')
-        
+        await query.edit_message_text("🔔 **انتخاب دارایی**", reply_markup=kb, parse_mode='Markdown')
     elif data.startswith("ALERT:SET:"):
         context.user_data['alert_asset'] = data.split(":")[2]
         context.user_data['state'] = 'awaiting_alert_price'
-        await query.edit_message_text(f"✅ دارایی: {get_display_name(context.user_data['alert_asset'])}\n\n🎯 حالا قیمت هدف را به تومان تایپ کنید و بفرستید:", reply_markup=back_kb(), parse_mode='Markdown')
-        
+        await query.edit_message_text(f"✅ دارایی: {get_display_name(context.user_data['alert_asset'])}\n\n🎯 قیمت هدف را تایپ کنید:", reply_markup=back_kb(), parse_mode='Markdown')
     elif data.startswith("ALERT:DIR:"):
         direction = data.split(":")[2]
         asset = context.user_data.get('alert_asset')
         price = context.user_data.get('alert_price')
-        if not asset or not price:
-            await query.edit_message_text("❌ خطا. دوباره شروع کنید.", reply_markup=main_menu())
-            return
-        try:
-            await alerts_collection.update_one(
-                {"chat_id": str(chat_id), "asset": asset},
-                {"$set": {"target_price": price, "direction": direction, "created_at": time.time()}},
-                upsert=True
-            )
+        if asset and price:
+            await alerts_collection.update_one({"chat_id": str(chat_id), "asset": asset}, {"$set": {"target_price": price, "direction": direction, "created_at": time.time()}}, upsert=True)
             dir_fa = "بالاتر برود 📈" if direction == "above" else "پایین‌تر بیاید 📉"
             context.user_data['state'] = None
-            await query.edit_message_text(f"✅ **هشدار ثبت شد!**\n\n🔔 {get_display_name(asset)}\n🎯 هدف: {format_price(price)} تومان\n📊 شرط: {dir_fa}", reply_markup=main_menu(), parse_mode='Markdown')
-        except Exception as e:
-            await query.edit_message_text("❌ خطا در ثبت هشدار.", reply_markup=main_menu())
+            await query.edit_message_text(f"✅ **هشدار ثبت شد!**\n🔔 {get_display_name(asset)}\n🎯 هدف: {format_price(price)} ({dir_fa})", reply_markup=main_menu(), parse_mode='Markdown')
 
     elif data == "MENU:MYALERTS":
         alerts = await alerts_collection.find({"chat_id": str(chat_id)}).to_list(length=20)
-        if not alerts:
-            await query.edit_message_text("📭 **هشدار فعالی ندارید.**", reply_markup=back_kb(), parse_mode='Markdown')
-            return
-        txt = "🔔 **هشدارهای فعال شما:**\n\n"
+        if not alerts: return await query.edit_message_text("📭 **هشدار فعالی ندارید.**", reply_markup=back_kb(), parse_mode='Markdown')
+        txt = "🔔 **هشدارهای شما:**\n\n"
         for a in alerts:
-            dir_fa = "بالاتر ⬆️" if a['direction'] == "above" else "پایین‌تر ⬇️"
-            txt += f"🔸 {get_display_name(a['asset'])} | هدف: {format_price(a['target_price'])} ({dir_fa})\n"
+            txt += f"🔸 {get_display_name(a['asset'])} | هدف: {format_price(a['target_price'])} ({a['direction']})\n"
         await query.edit_message_text(txt, reply_markup=back_kb(), parse_mode='Markdown')
 
-    # --- علاقه‌مندی‌ها (دکمه‌ای) ---
+    # علاقه‌مندی
     elif data == "FAV:VIEW":
         favs = await favorites_collection.find({"chat_id": str(chat_id)}).to_list(length=20)
-        if not favs:
-            await query.edit_message_text("⭐ لیست علاقه‌مندی‌های شما خالیه!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ افزودن دارایی", callback_data="FAV:ADD")], [InlineKeyboardButton("🔙 بازگشت", callback_data="MENU:MAIN")]]), parse_mode='Markdown')
-            return
-        txt = "⭐ **لیست علاقه‌مندی‌های شما:**\n\n"
+        if not favs: return await query.edit_message_text("⭐ لیست خالیه!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ افزودن", callback_data="FAV:ADD")], [InlineKeyboardButton("🔙 بازگشت", callback_data="MENU:MAIN")]]))
+        txt = "⭐ **علاقه‌مندی‌های شما:**\n\n"
         for f in favs:
-            price = get_price(f['asset'])
-            txt += f"🔸 {get_display_name(f['asset'])}: {format_price(price)} تومان\n"
-        await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ افزودن دارایی", callback_data="FAV:ADD")], [InlineKeyboardButton("🔙 بازگشت", callback_data="MENU:MAIN")]]), parse_mode='Markdown')
-
+            txt += f"🔸 {get_display_name(f['asset'])}: {format_price(get_price(f['asset']))} تومان\n"
+        await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ افزودن", callback_data="FAV:ADD")], [InlineKeyboardButton("🔙 بازگشت", callback_data="MENU:MAIN")]]), parse_mode='Markdown')
     elif data == "FAV:ADD":
         assets = ["BTC", "ETH", "USDT", "USD", "EUR", "gold_18", "coin_emami"]
         kb = get_assets_kb("FAV:SET", assets, "FAV:VIEW")
         await query.edit_message_text("⭐ **افزودن به علاقه‌مندی‌ها**\nکدام دارایی؟", reply_markup=kb, parse_mode='Markdown')
-
     elif data.startswith("FAV:SET:"):
         asset = data.split(":")[2]
-        try:
-            await favorites_collection.update_one({"chat_id": str(chat_id), "asset": asset}, {"$set": {"created_at": time.time()}}, upsert=True)
-            await query.edit_message_text(f"✅ *{get_display_name(asset)}* به علاقه‌مندی‌ها اضافه شد.", reply_markup=back_kb(), parse_mode='Markdown')
-        except:
-            await query.edit_message_text("❌ خطا در ذخیره.", reply_markup=back_kb())
+        await favorites_collection.update_one({"chat_id": str(chat_id), "asset": asset}, {"$set": {"created_at": time.time()}}, upsert=True)
+        await query.edit_message_text(f"✅ {get_display_name(asset)} اضافه شد.", reply_markup=back_kb(), parse_mode='Markdown')
 
-    # --- پروفایل و راهنما ---
+    # پروفایل
     elif data == "MENU:PROFILE":
         user = await get_user(chat_id)
-        txt = f"👤 **پروفایل شما**\n\n📝 نام: {user['name']}\n🆔 Chat ID: `{chat_id}`"
-        await query.edit_message_text(txt, reply_markup=back_kb(), parse_mode='Markdown')
+        await query.edit_message_text(f"👤 **پروفایل**\n📝 نام: {user['name']}\n🆔 ID: `{chat_id}`", reply_markup=back_kb(), parse_mode='Markdown')
     elif data == "MENU:HELP":
-        await query.edit_message_text("ℹ️ **راهنما**\n\nاز دکمه‌های منو برای دریافت قیمت‌ها، ثبت هشدار و... استفاده کنید.", reply_markup=back_kb(), parse_mode='Markdown')
+        await query.edit_message_text("ℹ️ **راهنما**\nاز دکمه‌های منو استفاده کنید.", reply_markup=back_kb(), parse_mode='Markdown')
 
 # ==================== تسک‌های پس‌زمینه ====================
 async def alert_checker(app):
@@ -427,7 +540,6 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("myid", myid_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     print("🤖 Bot Started...")
